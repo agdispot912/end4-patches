@@ -3,9 +3,34 @@
 
 set -u
 
+# udev may invoke this helper without the user's interactive environment.
+export PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"
+
 state_file="${XDG_RUNTIME_DIR:-/tmp}/end4-display-mode"
 
-command -v monique >/dev/null || {
+# Resolve the mode from the bar state.  Older versions wrote `60hz` and
+# `auto`, while the profile names are `Builtin 60hz` and `Builtin`.
+state_mode() {
+  local selected
+  [[ -r $state_file ]] || return 1
+  read -r selected < "$state_file" || return 1
+  case ${selected,,} in
+    auto) return 1 ;;
+    60hz|builtin\ 60hz) printf '%s\n' 'Builtin 60hz' ;;
+    builtin) printf '%s\n' 'Builtin' ;;
+    *) return 1 ;;
+  esac
+}
+
+auto_selected() {
+  local selected
+  [[ -r $state_file ]] || return 0
+  read -r selected < "$state_file" || return 0
+  [[ ${selected,,} == auto ]]
+}
+
+monique_bin=$(command -v monique 2>/dev/null || true)
+[[ -n $monique_bin ]] || {
   printf 'monique is not available in PATH\n' >&2
   exit 1
 }
@@ -28,19 +53,21 @@ apply_mode() {
     local mode
 
     # A bar-selected refresh rate takes priority until AUTO is selected again.
-    if [[ -r "$state_file" ]]; then
-        read -r mode < "$state_file"
-        [[ $mode != auto ]] && return
+    if ! auto_selected; then
+      mode=$(state_mode) || return
+      "$monique_bin" --switch-profile "$mode"
+      last_mode=$mode
+      return
     fi
 
-    if ac_online; then
+  if ac_online; then
     mode='Builtin'
   else
     mode='Builtin 60hz'
   fi
 
   [[ $mode == "$last_mode" ]] && return
-  monique --switch-profile "$mode"
+  "$monique_bin" --switch-profile "$mode"
   last_mode=$mode
 }
 
@@ -48,12 +75,16 @@ apply_mode
 
 [[ ${1:-} == --apply ]] && exit 0
 
+# Keep the event listener alive when launched by a service, but do not fail
+# when udevadm is unavailable or produces no events.
+command -v udevadm >/dev/null 2>&1 || exit 0
+
 type=
 while IFS= read -r line; do
   case "$line" in
     POWER_SUPPLY_TYPE=*) type=${line#*=} ;;
     '')
-      [[ $type == Mains ]] && apply_mode
+      [[ $type == Mains || $type == Battery ]] && apply_mode
       type=
       ;;
   esac
