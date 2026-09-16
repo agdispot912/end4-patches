@@ -82,13 +82,13 @@ new file mode 100644
 +    property bool changing: switchProcess.running
 +
 +    function refresh() {
-+        if (!changing) currentProcess.exec([Quickshell.shellPath("scripts/g84-profile.py"), "--current"])
++        if (!changing) currentProcess.exec(["g84-profile.py", "--current"])
 +    }
 +
 +    function toggle() {
 +        if (changing) return
 +        profile = profile === 0 ? 1 : 0
-+        switchProcess.exec([Quickshell.shellPath("scripts/g84-profile.py"), profile.toString()])
++        switchProcess.exec(["g84-profile.py", profile.toString()])
 +    }
 +
 +    Component.onCompleted: refresh()

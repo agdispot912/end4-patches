@@ -5,10 +5,12 @@ set -euo pipefail
 
 script_dir="$(dirname "$(readlink -f "$0")")"
 repo="${END4_REPO:-$HOME/.config/quickshell/end4-pC}"
+bin_dir="${END4_BIN_DIR:-$HOME/.local/bin}"
 
 usage() {
     printf 'Usage: %s [list|select|apply|remove] [patch ...]\n' "${0##*/}"
     printf 'Set END4_REPO to use a repository other than ~/.config/quickshell/end4-pC.\n'
+    printf 'Set END4_BIN_DIR to install helpers somewhere other than ~/.local/bin.\n'
 }
 
 patches=()
@@ -80,8 +82,23 @@ resolve_patch() {
     return 1
 }
 
+install_helpers() {
+    local patch=$1 helper
+
+    [[ -f "$patch.scripts" ]] || return
+    while IFS= read -r helper; do
+        [[ -n $helper && -f "$script_dir/$helper" ]] || {
+            printf 'Missing helper for %s: %s\n' "$(patch_name "$patch")" "$helper" >&2
+            return 1
+        }
+        install -Dm755 "$script_dir/$helper" "$bin_dir/$helper"
+        printf 'Installed helper %s to %s\n' "$helper" "$bin_dir"
+    done < "$patch.scripts"
+}
+
 apply_one() {
     local patch=$1 dependency
+    install_helpers "$patch"
     if is_installed "$patch"; then
         printf '%s is already installed\n' "$(patch_name "$patch")"
     else

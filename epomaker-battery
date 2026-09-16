@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Read the battery percentage of an EPOMAKER G84 HE on Linux."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+VENDOR_ID = 0x3151
+PRODUCTS = {0x5030: "wired", 0x5038: "2.4 GHz"}
+REPORT_SIZE = 64
+BATTERY_OPCODE = 0x82
+RECEIVER_STATUS_OPCODE = 0xF7
+
+# Usage Page 0xffff, Usage 0x02, followed by a 64-byte feature report.
+VENDOR_COLLECTION_PREFIX = bytes.fromhex("06 ff ff 09 02")
+FEATURE_REPORT = bytes.fromhex("95 40 75 08 b1 02")
+
+
+class BatteryError(Exception):
+    """An expected device or protocol error."""
+
+
+def _hid_ioctl(number: int, size: int) -> int:
+    """Build a Linux _IOWR('H', number, size) ioctl number."""
+    return (3 << 30) | (size << 16) | (ord("H") << 8) | number
+
+
+def build_wired_request() -> bytes:
+    report = bytearray(REPORT_SIZE)
+    report[0] = BATTERY_OPCODE
+    report[7] = (~sum(report[:7])) & 0xFF
+    return bytes(report)
+
+
+def parse_wired_response(report: bytes) -> int:
+    if len(report) < 2:
+        raise BatteryError("the keyboard returned a short battery report")
+    if report[0] != BATTERY_OPCODE:
+        raise BatteryError(f"unexpected battery response opcode 0x{report[0]:02x}")
+    if report[1] > 100:
+        raise BatteryError(f"invalid battery percentage {report[1]}")
+    return report[1]
+
+
+def build_receiver_request() -> bytes:
+    report = bytearray(REPORT_SIZE)
+    report[0] = RECEIVER_STATUS_OPCODE
+    return bytes(report)
+
+
+def parse_receiver_response(report: bytes) -> int:
+    if len(report) < 7:
+        raise BatteryError("the receiver returned a short status report")
+    if report[6] not in (1, 3):
+        raise BatteryError("no keyboard is paired with the receiver")
+    if report[3] != 0:
+        raise BatteryError("the keyboard is offline")
+    if report[1] > 100:
+        raise BatteryError(f"invalid battery percentage {report[1]}")
+    return report[1]
+
+
+def _read_hid_id(uevent: Path) -> tuple[int, int] | None:
+    try:
+        lines = uevent.read_text(encoding="ascii").splitlines()
+    except OSError:
+        return None
+    value = next((line[7:] for line in lines if line.startswith("HID_ID=")), None)
+    if value is None:
+        return None
+    try:
+        _, vendor, product = value.split(":")
+        return int(vendor, 16), int(product, 16)
+    except ValueError:
+        return None
+
+
+def discover_devices(
+    sys_hidraw: Path = Path("/sys/class/hidraw"), dev_root: Path = Path("/dev")
+) -> list[tuple[Path, str]]:
+    devices: list[tuple[Path, str]] = []
+    try:
+        entries = sys_hidraw.glob("hidraw*")
+    except OSError:
+        return devices
+    for entry in entries:
+        hid_id = _read_hid_id(entry / "device" / "uevent")
+        if hid_id is None or hid_id[0] != VENDOR_ID or hid_id[1] not in PRODUCTS:
+            continue
+        try:
+            descriptor = (entry / "device" / "report_descriptor").read_bytes()
+        except OSError:
+            continue
+        if descriptor.startswith(VENDOR_COLLECTION_PREFIX) and FEATURE_REPORT in descriptor:
+            devices.append((dev_root / entry.name, PRODUCTS[hid_id[1]]))
+    return sorted(devices, key=lambda device: device[1] != "wired")
+
+
+def query_device(path: Path, connection: str, settle_time: float = 0.02) -> tuple[int, bytes]:
+    request = build_wired_request() if connection == "wired" else build_receiver_request()
+    output = bytearray([0]) + bytearray(request)
+    response = bytearray(REPORT_SIZE + 1)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+    except PermissionError as error:
+        raise BatteryError(f"permission denied opening {path}; install the included udev rule") from error
+    except OSError as error:
+        raise BatteryError(f"cannot open {path}: {error.strerror}") from error
+    try:
+        try:
+            fcntl.ioctl(fd, _hid_ioctl(0x06, len(output)), output)
+            time.sleep(settle_time)
+            fcntl.ioctl(fd, _hid_ioctl(0x07, len(response)), response)
+        except OSError as error:
+            raise BatteryError(f"HID query failed on {path}: {error.strerror}") from error
+    finally:
+        os.close(fd)
+    payload = bytes(response[1:])
+    percentage = parse_wired_response(payload) if connection == "wired" else parse_receiver_response(payload)
+    return percentage, payload
+
+
+def poll_once(connection: str) -> tuple[int, str, Path, bytes]:
+    devices = discover_devices()
+    if connection != "auto":
+        selected = "2.4 GHz" if connection == "wireless" else connection
+        devices = [device for device in devices if device[1] == selected]
+    if not devices:
+        description = "G84 HE" if connection == "auto" else f"G84 HE ({connection})"
+        raise BatteryError(f"no {description} vendor HID interface found")
+    errors: list[str] = []
+    for path, detected_connection in devices:
+        try:
+            percentage, response = query_device(path, detected_connection)
+            return percentage, detected_connection, path, response
+        except BatteryError as error:
+            errors.append(str(error))
+    raise BatteryError("; ".join(errors))
+
+
+def print_result(percentage: int, connection: str, path: Path, response: bytes, as_json: bool, raw: bool) -> None:
+    if as_json:
+        result: dict[str, object] = {"percentage": percentage, "connection": connection, "device": str(path)}
+        if raw:
+            result["response"] = response.hex(" ")
+        print(json.dumps(result, separators=(",", ":")))
+        return
+    print(f"{percentage}% ({connection})")
+    if raw:
+        print(response.hex(" "))
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Poll an EPOMAKER G84 HE battery over USB or its 2.4 GHz dongle.")
+    parser.add_argument("--connection", choices=("auto", "wired", "wireless"), default="auto", help="connection to query (default: auto, preferring wired)")
+    parser.add_argument("--watch", nargs="?", type=float, const=5.0, metavar="SECONDS", help="keep polling, every 5 seconds or at the supplied interval")
+    parser.add_argument("--json", action="store_true", help="emit one JSON object per poll")
+    parser.add_argument("--raw", action="store_true", help="also show the raw HID response")
+    args = parser.parse_args(argv)
+    if args.watch is not None and args.watch <= 0:
+        parser.error("--watch interval must be greater than zero")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    while True:
+        try:
+            print_result(*poll_once(args.connection), as_json=args.json, raw=args.raw)
+        except BatteryError as error:
+            print(f"epomaker-battery: {error}", file=sys.stderr)
+            if args.watch is None:
+                return 1
+        if args.watch is None:
+            return 0
+        try:
+            time.sleep(args.watch)
+        except KeyboardInterrupt:
+            return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

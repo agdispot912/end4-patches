@@ -23,9 +23,11 @@ Use `patches.sh list` to show status, or `patches.sh apply NAME` and
 `patches.sh remove NAME` for non-interactive use. Set `END4_REPO` when the
 target repository is not `~/.config/quickshell/end4-pC`.
 
-The display patch expects `ac-power-profile` in `PATH`. Install or symlink the
-included helper into a directory in `PATH`; it contains no user-specific paths.
-The peripheral patch expects `mow` and `epomaker-battery` in `PATH`.
+Selecting the display patch installs `ac-power-profile` into
+`~/.local/bin` automatically. Ensure that directory is in `PATH`; set
+`END4_BIN_DIR` to use another installation directory. Selecting the peripheral
+battery and G84 toggle patches likewise installs `epomaker-battery` and
+`g84-profile.py`; the peripheral patch still expects `mow` in `PATH`.
 The VPN patch depends on the display patch; the selector installs that dependency
 automatically.
 
