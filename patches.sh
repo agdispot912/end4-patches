@@ -85,7 +85,7 @@ resolve_patch() {
 install_helpers() {
     local patch=$1 helper
 
-    [[ -f "$patch.scripts" ]] || return
+    [[ -f "$patch.scripts" ]] || return 0
     while IFS= read -r helper; do
         [[ -n $helper && -f "$script_dir/$helper" ]] || {
             printf 'Missing helper for %s: %s\n' "$(patch_name "$patch")" "$helper" >&2

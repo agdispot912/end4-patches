@@ -8,6 +8,7 @@ This folder contains optional local changes for `~/.config/quickshell/end4-pC`.
 | NetworkManager VPN button | `vpn-toggle.patch` |
 | Peripheral battery indicator | `end4-peripheral-battery.patch` |
 | G84 profile toggle | `g84-profile-toggle.patch` |
+| Compact Codex usage indicator | `codex-usage.patch` |
 
 ## Use A Patch
 
@@ -30,6 +31,10 @@ battery and G84 toggle patches likewise installs `epomaker-battery` and
 `g84-profile.py`; the peripheral patch still expects `mow` in `PATH`.
 The VPN patch depends on the display patch; the selector installs that dependency
 automatically.
+
+The Codex usage indicator requires [`codexbar`](https://github.com/steipete/codexbar)
+in `PATH`. Add **Codex Usage** to a bar layout in Settings, then hold it to show
+the 5-hour and weekly reset details.
 
 ## Create A Patch
 
