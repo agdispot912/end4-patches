@@ -1,0 +1,2 @@
+modules/ii/bar/G84ProfileToggle.qml:property int profile: 1
+scripts/g84-profile.py:EPOMAKER G84 HE

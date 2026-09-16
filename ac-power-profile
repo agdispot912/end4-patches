@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Switch the display profile after kernel/udev power-supply events.
+
+set -u
+
+state_file="${XDG_RUNTIME_DIR:-/tmp}/end4-display-mode"
+
+command -v monique >/dev/null || {
+  printf 'monique is not available in PATH\n' >&2
+  exit 1
+}
+
+ac_online() {
+  local supply type online
+
+  for supply in /sys/class/power_supply/*; do
+    [[ -r "$supply/type" && -r "$supply/online" ]] || continue
+    read -r type < "$supply/type"
+    read -r online < "$supply/online"
+    [[ $type == Mains && $online == 1 ]] && return 0
+  done
+
+  return 1
+}
+
+last_mode=
+apply_mode() {
+    local mode
+
+    # A bar-selected refresh rate takes priority until AUTO is selected again.
+    if [[ -r "$state_file" ]]; then
+        read -r mode < "$state_file"
+        [[ $mode != auto ]] && return
+    fi
+
+    if ac_online; then
+    mode='Builtin'
+  else
+    mode='Builtin 60hz'
+  fi
+
+  [[ $mode == "$last_mode" ]] && return
+  monique --switch-profile "$mode"
+  last_mode=$mode
+}
+
+apply_mode
+
+[[ ${1:-} == --apply ]] && exit 0
+
+type=
+while IFS= read -r line; do
+  case "$line" in
+    POWER_SUPPLY_TYPE=*) type=${line#*=} ;;
+    '')
+      [[ $type == Mains ]] && apply_mode
+      type=
+      ;;
+  esac
+done < <(udevadm monitor --udev --property --subsystem-match=power_supply)

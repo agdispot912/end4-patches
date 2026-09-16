@@ -1,0 +1,2 @@
+modules/common/Config.qml:showVpnToggle
+modules/ii/bar/VpnToggle.qml:readonly property string connectionName

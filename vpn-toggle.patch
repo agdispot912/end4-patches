@@ -1,0 +1,153 @@
+diff --git a/modules/common/Config.qml b/modules/common/Config.qml
+index 6a598a5..a17cb72 100644
+--- a/modules/common/Config.qml
++++ b/modules/common/Config.qml
+@@ -406,6 +406,8 @@ Singleton {
+                     property bool showDarkModeToggle: true
+                     property bool showPerformanceProfileToggle: false
+                     property bool showDisplayModeToggle: false
++                    property bool showVpnToggle: false
++                    property string vpnConnection: ""
+                     property string displayMode: "auto" // auto, 120hz, 60hz
+                     property bool showScreenRecord: false       
+                     property bool isRecording: false
+diff --git a/modules/ii/bar/UtilButtons.qml b/modules/ii/bar/UtilButtons.qml
+index b2128a6..223614e 100644
+--- a/modules/ii/bar/UtilButtons.qml
++++ b/modules/ii/bar/UtilButtons.qml
+@@ -378,5 +378,40 @@ Item {
+                 }
+             }
+         }
++
++        Loader {
++            active: Config.options.bar.utilButtons.showVpnToggle
++            visible: active
++            sourceComponent: isMaterial ? vpnM3 : legacyVpn
++        }
++        Component {
++            id: vpnM3
++            UtilButton {
++                iconText: vpn.active ? "vpn_key" : "vpn_key_off"
++                onClicked: vpn.toggle()
++
++                VpnToggle {
++                    id: vpn
++                }
++            }
++        }
++        Component {
++            id: legacyVpn
++            CircleUtilButton {
++                colBackground: vpn.active ? Appearance.colors.colPrimaryContainer : "transparent"
++                onClicked: vpn.toggle()
++                MaterialSymbol {
++                    horizontalAlignment: Qt.AlignHCenter
++                    fill: 0
++                    text: vpn.active ? "vpn_key" : "vpn_key_off"
++                    iconSize: Appearance.font.pixelSize.large
++                    color: vpn.active ? Appearance.colors.colPrimary : Appearance.colors.colOnLayer2
++                }
++
++                VpnToggle {
++                    id: vpn
++                }
++            }
++        }
+     }
+ }
+diff --git a/modules/ii/settings/pages/BarConfig.qml b/modules/ii/settings/pages/BarConfig.qml
+index 2d18384..33adb27 100644
+--- a/modules/ii/settings/pages/BarConfig.qml
++++ b/modules/ii/settings/pages/BarConfig.qml
+@@ -391,6 +391,12 @@ ContentPage {
+                 }
+                 ConfigRow {
+                     uniform: true
++                    ConfigSwitch {
++                        buttonIcon: "vpn_key"
++                        text: Translation.tr("VPN toggle")
++                        checked: Config.options.bar.utilButtons.showVpnToggle
++                        onCheckedChanged: { Config.options.bar.utilButtons.showVpnToggle = checked }
++                    }
+                     ConfigSwitch {
+                         buttonIcon: "display_settings"
+                         text: Translation.tr("Display mode")
+@@ -410,6 +416,19 @@ ContentPage {
+                         onCheckedChanged: { Config.options.bar.utilButtons.showWallpaperToggle = checked }
+                     }
+                 }
++                ConfigRow {
++                    StyledText {
++                        Layout.preferredWidth: 140
++                        text: Translation.tr("VPN connection name")
++                        color: Appearance.colors.colOnLayer1
++                    }
++                    MaterialTextField {
++                        Layout.fillWidth: true
++                        placeholderText: Translation.tr("NetworkManager profile")
++                        text: Config.options.bar.utilButtons.vpnConnection
++                        onEditingFinished: Config.options.bar.utilButtons.vpnConnection = text.trim()
++                    }
++                }
+             }
+         }
+ 
+diff --git a/modules/ii/bar/VpnToggle.qml b/modules/ii/bar/VpnToggle.qml
+new file mode 100644
+index 0000000..c8588a5
+--- /dev/null
++++ b/modules/ii/bar/VpnToggle.qml
+@@ -0,0 +1,52 @@
++import QtQuick
++import Quickshell.Io
++import qs.modules.common
++
++Item {
++    id: root
++    visible: false
++
++    readonly property string connectionName: Config.options.bar.utilButtons.vpnConnection.trim()
++    readonly property bool configured: connectionName.length > 0
++    property bool active: false
++    property bool changing: toggleProcess.running
++
++    function refresh() {
++        if (!configured) {
++            active = false
++            return
++        }
++        stateProcess.exec(["nmcli", "-g", "GENERAL.STATE", "connection", "show", connectionName])
++    }
++
++    function toggle() {
++        if (!configured || changing) return
++        toggleProcess.exec(["nmcli", "connection", active ? "down" : "up", "id", connectionName])
++    }
++
++    onConnectionNameChanged: refresh()
++    Component.onCompleted: refresh()
++
++    // NetworkManager changes are delivered by nmcli monitor; no state polling is used.
++    Process {
++        id: monitorProcess
++        running: root.configured
++        command: ["nmcli", "monitor"]
++        stdout: SplitParser {
++            onRead: root.refresh()
++        }
++    }
++
++    Process {
++        id: stateProcess
++        stdout: StdioCollector {
++            id: stateCollector
++            onStreamFinished: root.active = stateCollector.text.trim() === "activated"
++        }
++    }
++
++    Process {
++        id: toggleProcess
++        onExited: root.refresh()
++    }
++}

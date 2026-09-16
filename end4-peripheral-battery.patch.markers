@@ -1,0 +1,2 @@
+modules/ii/bar/PeripheralBatteryIndicator.qml:readonly property int mousePercentage
+services/PeripheralBattery.qml:pragma Singleton

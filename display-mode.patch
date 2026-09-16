@@ -1,0 +1,165 @@
+diff --git a/modules/common/Config.qml b/modules/common/Config.qml
+index 55b6e8f..6a598a5 100644
+--- a/modules/common/Config.qml
++++ b/modules/common/Config.qml
+@@ -405,6 +405,8 @@ Singleton {
+                     property bool showWallpaperToggle: false
+                     property bool showDarkModeToggle: true
+                     property bool showPerformanceProfileToggle: false
++                    property bool showDisplayModeToggle: false
++                    property string displayMode: "auto" // auto, 120hz, 60hz
+                     property bool showScreenRecord: false       
+                     property bool isRecording: false
+                 }
+diff --git a/modules/ii/bar/UtilButton.qml b/modules/ii/bar/UtilButton.qml
+index a5cf86e..36e47b3 100644
+--- a/modules/ii/bar/UtilButton.qml
++++ b/modules/ii/bar/UtilButton.qml
+@@ -9,11 +9,12 @@ Item {
+     id: root
+     signal clicked(event: var)
+     property alias iconText: symbol.text
++    property string label: ""
+     property bool isActive: false
+     property bool forceHovered: false
+ 
+-    implicitWidth: vertical ? 26 : (hovered ? 54 : 26)
+-    implicitHeight: vertical ? (hovered ? 54 : 26) : 26
++    implicitWidth: label.length > 0 ? 42 : (vertical ? 26 : (hovered ? 54 : 26))
++    implicitHeight: label.length > 0 ? 26 : (vertical ? (hovered ? 54 : 26) : 26)
+ 
+     property bool hovered: mouseArea.containsMouse || forceHovered
+ 
+@@ -46,6 +47,7 @@ Item {
+         MaterialSymbol {
+             id: symbol
+             anchors.centerIn: parent
++            visible: !root.label
+             iconSize: Appearance.font.pixelSize.large
+             color: root.hovered ? Appearance.colors.colOnPrimary : Appearance.colors.colPrimary
+ 
+@@ -53,6 +55,19 @@ Item {
+                 ColorAnimation { duration: Appearance.animation.elementMoveFast.duration }
+             }
+         }
++
++        StyledText {
++            anchors.centerIn: parent
++            visible: root.label
++            text: root.label
++            font.pixelSize: Appearance.font.pixelSize.small
++            font.weight: Font.Medium
++            color: root.hovered ? Appearance.colors.colOnPrimary : Appearance.colors.colPrimary
++
++            Behavior on color {
++                ColorAnimation { duration: Appearance.animation.elementMoveFast.duration }
++            }
++        }
+     }
+ 
+     MouseArea {
+@@ -61,4 +76,4 @@ Item {
+         hoverEnabled: true
+         onClicked: (e) => root.clicked(e)
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/modules/ii/bar/UtilButtons.qml b/modules/ii/bar/UtilButtons.qml
+index 2391b1b..b2128a6 100644
+--- a/modules/ii/bar/UtilButtons.qml
++++ b/modules/ii/bar/UtilButtons.qml
+@@ -18,6 +18,32 @@ Item {
+     implicitWidth: isMaterial && !root.vertical ? flow.implicitWidth : root.vertical ? Appearance.sizes.verticalBarWidth - 14 : flow.implicitWidth + 4
+     implicitHeight: isMaterial && root.vertical ? flow.implicitHeight: isMaterial ? 32 : root.vertical ? flow.implicitHeight + 4 : Appearance.sizes.barHeight
+ 
++    function cycleDisplayMode() {
++        switch (Config.options.bar.utilButtons.displayMode) {
++        case "auto": Config.options.bar.utilButtons.displayMode = "120hz"; break;
++        case "120hz": Config.options.bar.utilButtons.displayMode = "60hz"; break;
++        default: Config.options.bar.utilButtons.displayMode = "auto"; break;
++        }
++        displayModeDebounce.restart()
++    }
++
++    function applyDisplayMode() {
++        const mode = Config.options.bar.utilButtons.displayMode
++        const stateFile = "${XDG_RUNTIME_DIR:-/tmp}/end4-display-mode"
++        const manualMode = mode === "120hz" ? "120hz" : "60hz"
++        const profile = mode === "120hz" ? "Builtin" : "Builtin 60hz"
++        const command = mode === "auto"
++            ? `printf '%s\\n' auto > "${stateFile}"; ac-power-profile --apply`
++            : `printf '%s\\n' ${manualMode} > "${stateFile}"; monique --switch-profile "${profile}"`
++        Quickshell.execDetached(["bash", "-c", command])
++    }
++
++    Timer {
++        id: displayModeDebounce
++        interval: 1000
++        onTriggered: root.applyDisplayMode()
++    }
++
+     Flow {
+         id: flow
+         anchors.centerIn: parent
+@@ -323,5 +349,34 @@ Item {
+                 }
+             }
+         }
++
++        Loader {
++            active: Config.options.bar.utilButtons.showDisplayModeToggle
++            visible: active
++            sourceComponent: isMaterial ? displayModeM3 : legacyDisplayMode
++        }
++        Component {
++            id: displayModeM3
++            UtilButton {
++                label: Config.options.bar.utilButtons.displayMode === "auto" ? "AUTO"
++                    : Config.options.bar.utilButtons.displayMode === "120hz" ? "120" : "60"
++                onClicked: root.cycleDisplayMode()
++            }
++        }
++        Component {
++            id: legacyDisplayMode
++            CircleUtilButton {
++                implicitWidth: 42
++                onClicked: root.cycleDisplayMode()
++                StyledText {
++                    anchors.centerIn: parent
++                    text: Config.options.bar.utilButtons.displayMode === "auto" ? "AUTO"
++                        : Config.options.bar.utilButtons.displayMode === "120hz" ? "120" : "60"
++                    font.pixelSize: Appearance.font.pixelSize.small
++                    font.weight: Font.Medium
++                    color: Appearance.colors.colOnLayer2
++                }
++            }
++        }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/modules/ii/settings/pages/BarConfig.qml b/modules/ii/settings/pages/BarConfig.qml
+index 4ec1310..2d18384 100644
+--- a/modules/ii/settings/pages/BarConfig.qml
++++ b/modules/ii/settings/pages/BarConfig.qml
+@@ -391,6 +391,12 @@ ContentPage {
+                 }
+                 ConfigRow {
+                     uniform: true
++                    ConfigSwitch {
++                        buttonIcon: "display_settings"
++                        text: Translation.tr("Display mode")
++                        checked: Config.options.bar.utilButtons.showDisplayModeToggle
++                        onCheckedChanged: { Config.options.bar.utilButtons.showDisplayModeToggle = checked }
++                    }
+                     ConfigSwitch {
+                         buttonIcon: "screen_record"
+                         text: Translation.tr("Record Screen")
+@@ -591,4 +597,4 @@ ContentPage {
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}

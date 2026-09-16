@@ -1,0 +1,2 @@
+modules/common/Config.qml:showDisplayModeToggle
+modules/ii/bar/UtilButtons.qml:cycleDisplayMode

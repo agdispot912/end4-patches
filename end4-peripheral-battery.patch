@@ -1,0 +1,227 @@
+diff --git a/modules/ii/settings/pages/BarConfig.qml b/modules/ii/settings/pages/BarConfig.qml
+--- a/modules/ii/settings/pages/BarConfig.qml
++++ b/modules/ii/settings/pages/BarConfig.qml
+@@ -47,7 +47,8 @@ ContentPage {
+         { id: "utilButtons",       name: Translation.tr("Util Buttons"),         icon: "toggle_on" },
+         { id: "sysTray",           name: Translation.tr("Tray"),                 icon: "inbox" },
+         { id: "batteryIndicator",  name: Translation.tr("Battery"),              icon: "battery_android_frame_full" },
++        { id: "peripheralBatteryIndicator", name: Translation.tr("Mouse & Keyboard Battery"), icon: "devices" },
+         { id: "bluetooth",         name: Translation.tr("Bluetooth"),            icon: "bluetooth" },
+         { id: "activeWindow",      name: Translation.tr("Active Window"),        icon: "subtitles" },
+         { id: "powerButton",       name: Translation.tr("Power Button"),         icon: "power_settings_new" },
+         { id: "updatesCount",      name: Translation.tr("Updates"),              icon: "deployed_code_update" },
+diff --git a/modules/ii/bar/PeripheralBatteryIndicator.qml b/modules/ii/bar/PeripheralBatteryIndicator.qml
+new file mode 100644
+--- /dev/null
++++ b/modules/ii/bar/PeripheralBatteryIndicator.qml
+@@ -0,0 +1,129 @@
++import QtQuick
++import QtQuick.Layouts
++import qs.modules.common
++import qs.modules.common.widgets
++import qs.services
++
++MouseArea {
++    id: root
++
++    property bool vertical: false
++    readonly property int mousePercentage: PeripheralBattery.mousePercentage
++    readonly property bool mouseCharging: PeripheralBattery.mouseCharging
++    readonly property int keyboardPercentage: PeripheralBattery.keyboardPercentage
++    readonly property bool mouseAvailable: mousePercentage >= 0
++    readonly property bool keyboardAvailable: keyboardPercentage >= 0
++
++    implicitWidth: vertical ? Appearance.sizes.verticalBarWidth : horizontalContent.implicitWidth + 8
++    implicitHeight: vertical ? verticalContent.implicitHeight + 8 : Appearance.sizes.barHeight
++
++    hoverEnabled: true
++    cursorShape: Qt.PointingHandCursor
++    acceptedButtons: Qt.RightButton
++    onClicked: PeripheralBattery.refresh()
++
++    function displayPercentage(percentage) {
++        return percentage >= 0 ? percentage : "?"
++    }
++
++    function batteryColor(percentage) {
++        if (percentage >= 0 && percentage <= Config.options.battery.low)
++            return Appearance.m3colors.m3error
++        return Appearance.colors.colOnSecondaryContainer
++    }
++
++    RowLayout {
++        id: horizontalContent
++        visible: !root.vertical
++        anchors.centerIn: parent
++        spacing: 3
++
++        MaterialSymbol {
++            Layout.alignment: Qt.AlignVCenter
++            text: "mouse"
++            iconSize: Appearance.font.pixelSize.small
++            color: Appearance.colors.colOnLayer1
++        }
++        MaterialSymbol {
++            visible: root.mouseCharging
++            Layout.alignment: Qt.AlignVCenter
++            Layout.leftMargin: -3
++            Layout.rightMargin: -3
++            text: "bolt"
++            iconSize: Appearance.font.pixelSize.smaller
++            color: Appearance.colors.colOnLayer1
++        }
++        ClippedProgressBar {
++            Layout.alignment: Qt.AlignVCenter
++            value: root.mouseAvailable ? root.mousePercentage / 100 : 0
++            text: root.displayPercentage(root.mousePercentage)
++            highlightColor: root.batteryColor(root.mousePercentage)
++        }
++        MaterialSymbol {
++            Layout.alignment: Qt.AlignVCenter
++            text: "keyboard"
++            iconSize: Appearance.font.pixelSize.small
++            color: Appearance.colors.colOnLayer1
++        }
++        ClippedProgressBar {
++            Layout.alignment: Qt.AlignVCenter
++            value: root.keyboardAvailable ? root.keyboardPercentage / 100 : 0
++            text: root.displayPercentage(root.keyboardPercentage)
++            highlightColor: root.batteryColor(root.keyboardPercentage)
++        }
++    }
++
++    ColumnLayout {
++        id: verticalContent
++        visible: root.vertical
++        anchors.centerIn: parent
++        spacing: 4
++
++        MaterialSymbol {
++            Layout.alignment: Qt.AlignHCenter
++            text: "mouse"
++            iconSize: Appearance.font.pixelSize.small
++            color: Appearance.colors.colOnLayer1
++        }
++        MaterialSymbol {
++            visible: root.mouseCharging
++            Layout.alignment: Qt.AlignHCenter
++            Layout.topMargin: -4
++            Layout.bottomMargin: -4
++            text: "bolt"
++            iconSize: Appearance.font.pixelSize.smaller
++            color: Appearance.colors.colOnLayer1
++        }
++        Item {
++            Layout.alignment: Qt.AlignHCenter
++            implicitWidth: 34
++            implicitHeight: 38
++            ClippedProgressBar {
++                anchors.centerIn: parent
++                rotation: -90
++                value: root.mouseAvailable ? root.mousePercentage / 100 : 0
++                text: root.displayPercentage(root.mousePercentage)
++                highlightColor: root.batteryColor(root.mousePercentage)
++            }
++        }
++        MaterialSymbol {
++            Layout.alignment: Qt.AlignHCenter
++            text: "keyboard"
++            iconSize: Appearance.font.pixelSize.small
++            color: Appearance.colors.colOnLayer1
++        }
++        Item {
++            Layout.alignment: Qt.AlignHCenter
++            implicitWidth: 34
++            implicitHeight: 38
++            ClippedProgressBar {
++                anchors.centerIn: parent
++                rotation: -90
++                value: root.keyboardAvailable ? root.keyboardPercentage / 100 : 0
++                text: root.displayPercentage(root.keyboardPercentage)
++                highlightColor: root.batteryColor(root.keyboardPercentage)
++            }
++        }
++    }
++
++}
+diff --git a/services/PeripheralBattery.qml b/services/PeripheralBattery.qml
+new file mode 100644
+--- /dev/null
++++ b/services/PeripheralBattery.qml
+@@ -0,0 +1,76 @@
++pragma Singleton
++
++import QtQuick
++import Quickshell
++import Quickshell.Io
++
++Singleton {
++    id: root
++
++    readonly property int unavailable: -1
++    property int mousePercentage: unavailable
++    property bool mouseCharging: false
++    property int keyboardPercentage: unavailable
++
++    function percentageFromText(text) {
++        const match = text.trim().match(/^(\d{1,3})%/)
++        if (!match) return root.unavailable
++
++        const percentage = Number(match[1])
++        return percentage >= 0 && percentage <= 100 ? percentage : root.unavailable
++    }
++
++    function keyboardPercentageFromJson(text) {
++        try {
++            const percentage = Number(JSON.parse(text).percentage)
++            return percentage >= 0 && percentage <= 100 ? percentage : root.unavailable
++        } catch (error) {
++            return root.unavailable
++        }
++    }
++
++    function refresh() {
++        if (!mouseProcess.running) mouseProcess.running = true
++        if (!keyboardProcess.running) keyboardProcess.running = true
++    }
++
++    Timer {
++        interval: 60000
++        running: true
++        repeat: true
++        triggeredOnStart: true
++        onTriggered: root.refresh()
++    }
++
++    Process {
++        id: mouseProcess
++        command: ["mow", "report", "battery"]
++        stdout: StdioCollector {
++            onStreamFinished: {
++                root.mousePercentage = root.percentageFromText(text)
++                root.mouseCharging = root.mousePercentage >= 0
++                    && /\((charging|fully charged)\)/i.test(text)
++            }
++        }
++        onExited: (exitCode) => {
++            if (exitCode !== 0) {
++                root.mousePercentage = root.unavailable
++                root.mouseCharging = false
++            }
++        }
++    }
++
++    Process {
++        id: keyboardProcess
++        command: [
++            "epomaker-battery",
++            "--json"
++        ]
++        stdout: StdioCollector {
++            onStreamFinished: root.keyboardPercentage = root.keyboardPercentageFromJson(text)
++        }
++        onExited: (exitCode) => {
++            if (exitCode !== 0) root.keyboardPercentage = root.unavailable
++        }
++    }
++}

@@ -1,0 +1,186 @@
+diff --git a/modules/common/Config.qml b/modules/common/Config.qml
+--- a/modules/common/Config.qml
++++ b/modules/common/Config.qml
+@@ -471,6 +471,7 @@ Singleton {
+                     property bool showWallpaperToggle: true
+                     property bool showDarkModeToggle: false
+                     property bool showPerformanceProfileToggle: false
++                    property bool showG84ProfileToggle: false
+                     property bool showScreenRecord: false       
+                     property bool isRecording: false
+                 }
+diff --git a/modules/ii/bar/UtilButtons.qml b/modules/ii/bar/UtilButtons.qml
+--- a/modules/ii/bar/UtilButtons.qml
++++ b/modules/ii/bar/UtilButtons.qml
+@@ -322,5 +322,34 @@ Item {
+                 }
+             }
+         }
++
++        Loader {
++            active: Config.options.bar.utilButtons.showG84ProfileToggle
++            visible: active
++            sourceComponent: isMaterial ? g84ProfileM3 : legacyG84Profile
++        }
++        Component {
++            id: g84ProfileM3
++            UtilButton {
++                iconText: g84.profile === 0 ? "sports_esports" : "edit_note"
++                onClicked: g84.toggle()
++                G84ProfileToggle { id: g84 }
++            }
++        }
++        Component {
++            id: legacyG84Profile
++            CircleUtilButton {
++                colBackground: g84.profile === 0 ? Appearance.colors.colPrimaryContainer : "transparent"
++                onClicked: g84.toggle()
++                MaterialSymbol {
++                    horizontalAlignment: Qt.AlignHCenter
++                    fill: 0
++                    text: g84.profile === 0 ? "sports_esports" : "edit_note"
++                    iconSize: Appearance.font.pixelSize.large
++                    color: g84.profile === 0 ? Appearance.colors.colPrimary : Appearance.colors.colOnLayer2
++                }
++                G84ProfileToggle { id: g84 }
++            }
++        }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/modules/ii/settings/pages/BarConfig.qml b/modules/ii/settings/pages/BarConfig.qml
+--- a/modules/ii/settings/pages/BarConfig.qml
++++ b/modules/ii/settings/pages/BarConfig.qml
+@@ -487,6 +487,12 @@ ContentPage {
+             GroupedList {
+                 ConfigRow {
+                     uniform: true
++                    ConfigSwitch {
++                        buttonIcon: "sports_esports"
++                        text: Translation.tr("G84 profile toggle")
++                        checked: Config.options.bar.utilButtons.showG84ProfileToggle
++                        onCheckedChanged: { Config.options.bar.utilButtons.showG84ProfileToggle = checked }
++                    }
+                     ConfigSwitch {
+                         buttonIcon: "screenshot_region"
+                         text: Translation.tr("Screen snip")
+diff --git a/modules/ii/bar/G84ProfileToggle.qml b/modules/ii/bar/G84ProfileToggle.qml
+new file mode 100644
+--- /dev/null
++++ b/modules/ii/bar/G84ProfileToggle.qml
+@@ -0,0 +1,53 @@
++import QtQuick
++import Quickshell
++import Quickshell.Io
++
++Item {
++    id: root
++    visible: false
++
++    property int profile: 1
++    property bool changing: switchProcess.running
++
++    function refresh() {
++        if (!changing) currentProcess.exec([Quickshell.shellPath("scripts/g84-profile.py"), "--current"])
++    }
++
++    function toggle() {
++        if (changing) return
++        profile = profile === 0 ? 1 : 0
++        switchProcess.exec([Quickshell.shellPath("scripts/g84-profile.py"), profile.toString()])
++    }
++
++    Component.onCompleted: refresh()
++
++    Timer {
++        interval: 60000
++        running: true
++        repeat: true
++        triggeredOnStart: true
++        onTriggered: root.refresh()
++    }
++
++    Process {
++        id: currentProcess
++        stdout: StdioCollector {
++            id: currentCollector
++            onStreamFinished: {
++                const value = Number(currentCollector.text.trim())
++                root.profile = value === 0 ? 0 : 1
++            }
++        }
++    }
++
++    Process {
++        id: switchProcess
++        onExited: refreshDelay.restart()
++    }
++
++    Timer {
++        id: refreshDelay
++        interval: 500
++        onTriggered: root.refresh()
++    }
++}
+diff --git a/scripts/g84-profile.py b/scripts/g84-profile.py
+new file mode 100755
+--- /dev/null
++++ b/scripts/g84-profile.py
+@@ -0,0 +1,56 @@
++#!/usr/bin/env python3
++
++import argparse
++import fcntl
++import os
++import time
++
++
++DEFAULT_DEVICE = "/dev/input/by-id/usb-_G84_HE-if02-hidraw"
++HIDIOCSFEATURE = lambda length: 0xC0000000 | (length << 16) | (ord("H") << 8) | 0x06
++HIDIOCGFEATURE = lambda length: 0xC0000000 | (length << 16) | (ord("H") << 8) | 0x07
++
++
++parser = argparse.ArgumentParser(description="Switch an EPOMAKER G84 HE onboard profile.")
++parser.add_argument("profile", nargs="?", type=int, choices=range(4))
++parser.add_argument("--device", default=DEFAULT_DEVICE, help="vendor hidraw interface")
++parser.add_argument("--current", action="store_true", help="print the active profile")
++args = parser.parse_args()
++
++if (args.profile is None) == (not args.current):
++    parser.error("provide a profile or use --current")
++
++
++def packet(command, value=0):
++    # hidraw feature-report buffers include the report ID first. The G84 uses ID 0.
++    result = bytearray(65)
++    result[1] = command
++    result[2] = value
++    result[8] = ~(result[1] + result[2]) & 0xFF
++    return result
++
++
++def read_profile(fd):
++    fcntl.ioctl(fd, HIDIOCSFEATURE(65), packet(0x84))
++    response = bytearray(65)
++    fcntl.ioctl(fd, HIDIOCGFEATURE(len(response)), response)
++    if response[1] != 0x84 or response[2] not in range(4):
++        raise RuntimeError(f"unexpected profile response: {response[:9].hex(' ')}")
++    return response[2]
++
++
++try:
++    fd = os.open(args.device, os.O_RDWR)
++    try:
++        if args.current:
++            print(read_profile(fd))
++        else:
++            fcntl.ioctl(fd, HIDIOCSFEATURE(65), packet(0x04, args.profile))
++            time.sleep(0.25)
++    finally:
++        os.close(fd)
++except (OSError, RuntimeError) as error:
++    parser.exit(1, f"Could not communicate with {args.device}: {error}\n")
++
++if not args.current:
++    print(f"Switched G84 HE to profile {args.profile}.")
